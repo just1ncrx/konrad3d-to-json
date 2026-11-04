@@ -90,7 +90,7 @@ jobs:
           # Meso: optional (weniger Versuche, Job laeuft bei Fehlschlag weiter)
           if ! fetch "MESO" \
               "https://opendata.dwd.de/weather/radar/mesocyclones/${MESO_FILE}" \
-              "${OUT_DIR}/${MESO_FILE}" 12 5; then
+              "${OUT_DIR}/${MESO_FILE}" 30 5; then
             echo "::warning::[MESO] ${MESO_FILE} nicht verfuegbar - weiter ohne Meso."
           fi
 
