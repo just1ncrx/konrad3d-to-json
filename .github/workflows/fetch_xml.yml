@@ -37,21 +37,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Set DATE und TIME (auf volle Stunde abrunden, UTC)
+      - name: Set DATE und TIME (auf 5-min-Slot abrunden, UTC)
         run: |
-          # Start 14:04 UTC -> Slot 14:00 UTC
+          # 14:29 UTC -> Slot 14:25 UTC
           NOW=$(date -u +%s)
-          SLOT_EPOCH=$(( NOW / 3600 * 3600 ))
+          SLOT_EPOCH=$(( NOW / 300 * 300 ))
 
           DATE=$(date -u -d "@$SLOT_EPOCH" +%Y%m%d)
-          HOUR=$(date -u -d "@$SLOT_EPOCH" +%H)
+          HHMM=$(date -u -d "@$SLOT_EPOCH" +%H%M)
 
           echo "DATE=$DATE" >> $GITHUB_ENV
-          echo "HOUR=$HOUR" >> $GITHUB_ENV
-          echo "KONRAD_FILE=KONRAD3D_${DATE}T${HOUR}0000.xml" >> $GITHUB_ENV
-          echo "MESO_FILE=meso_${DATE}_${HOUR}00.xml" >> $GITHUB_ENV
+          echo "HHMM=$HHMM" >> $GITHUB_ENV
+          echo "KONRAD_FILE=KONRAD3D_${DATE}T${HHMM}00.xml" >> $GITHUB_ENV
+          echo "MESO_FILE=meso_${DATE}_${HHMM}.xml" >> $GITHUB_ENV
 
-          echo "Slot UTC: ${DATE} ${HOUR}:00"
+          echo "Slot UTC: ${DATE} ${HHMM}"
+          echo "KONRAD: KONRAD3D_${DATE}T${HHMM}00.xml | MESO: meso_${DATE}_${HHMM}.xml"
 
       - name: Download KONRAD3D + Meso (mit Retry)
         run: |
