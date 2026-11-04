@@ -1,0 +1,2 @@
+# konrad3d_to_json.py nutzt nur die Python-Standardbibliothek.
+# Hier bei Bedarf weitere Pakete eintragen.
