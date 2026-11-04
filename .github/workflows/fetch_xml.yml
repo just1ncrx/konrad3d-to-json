@@ -1,0 +1,119 @@
+name: Fetch KONRAD3D and Convert to JSON
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: fetch-konrad3d
+  cancel-in-progress: false
+
+env:
+  R2_PREFIX: konrad3d
+  # Optional: Basis-URL der Meso-XMLs (leer = Meso wird uebersprungen)
+  # Erwartet wird: ${MESO_BASE_URL}/meso_YYYYMMDD_HHMM.xml
+  MESO_BASE_URL: ""
+
+jobs:
+  fetch_convert_deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.VII_PAT }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Cache Python packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set DATE und TIME (auf volle Stunde abrunden, UTC)
+        run: |
+          # Start 14:04 UTC -> Slot 14:00 UTC
+          NOW=$(date -u +%s)
+          SLOT_EPOCH=$(( NOW / 3600 * 3600 ))
+
+          DATE=$(date -u -d "@$SLOT_EPOCH" +%Y%m%d)
+          HOUR=$(date -u -d "@$SLOT_EPOCH" +%H)
+
+          echo "DATE=$DATE" >> $GITHUB_ENV
+          echo "HOUR=$HOUR" >> $GITHUB_ENV
+          echo "KONRAD_FILE=KONRAD3D_${DATE}T${HOUR}0000.xml" >> $GITHUB_ENV
+          echo "MESO_FILE=meso_${DATE}_${HOUR}00.xml" >> $GITHUB_ENV
+
+          echo "Slot UTC: ${DATE} ${HOUR}:00"
+
+      - name: Download KONRAD3D (mit Retry)
+        run: |
+          MAX_ATTEMPTS=50
+          SLEEP_SECONDS=5
+
+          OUT_DIR="data/konrad3d"
+          mkdir -p "$OUT_DIR"
+          URL="https://opendata.dwd.de/weather/radar/konrad3d/${KONRAD_FILE}"
+          OUT="${OUT_DIR}/${KONRAD_FILE}"
+          TMP_FILE="${RUNNER_TEMP}/${KONRAD_FILE}"
+
+          for i in $(seq 1 "$MAX_ATTEMPTS"); do
+            HTTP_CODE=$(curl -s -o "$TMP_FILE" -w "%{http_code}" \
+              --connect-timeout 10 --max-time 120 "$URL" || echo "000")
+            if [ "$HTTP_CODE" = "200" ] && [ -s "$TMP_FILE" ]; then
+              mv "$TMP_FILE" "$OUT"
+              echo "[KONRAD3D] Erfolgreich (Versuch $i/$MAX_ATTEMPTS): $OUT"
+              exit 0
+            fi
+            echo "[KONRAD3D] Versuch $i/$MAX_ATTEMPTS: noch nicht verfuegbar (HTTP $HTTP_CODE)."
+            rm -f "$TMP_FILE"
+            sleep "$SLEEP_SECONDS"
+          done
+
+          echo "::error::[KONRAD3D] ${KONRAD_FILE} nach $MAX_ATTEMPTS Versuchen nicht verfuegbar - Abbruch."
+          exit 1
+
+      - name: Download Meso-XML (optional)
+        if: ${{ env.MESO_BASE_URL != '' }}
+        continue-on-error: true
+        run: |
+          OUT="data/konrad3d/${MESO_FILE}"
+          HTTP_CODE=$(curl -s -o "$OUT" -w "%{http_code}" \
+            --connect-timeout 10 --max-time 120 "${MESO_BASE_URL}/${MESO_FILE}" || echo "000")
+          if [ "$HTTP_CODE" = "200" ] && [ -s "$OUT" ]; then
+            echo "[MESO] OK: $OUT"
+          else
+            echo "[MESO] nicht verfuegbar (HTTP $HTTP_CODE) - weiter ohne Meso."
+            rm -f "$OUT"
+          fi
+
+      - name: XML nach JSON konvertieren
+        run: |
+          ARGS=(--konrad "data/konrad3d/${KONRAD_FILE}" --out output/konrad3d.json)
+          if [ -s "data/konrad3d/${MESO_FILE}" ]; then
+            ARGS+=(--meso "data/konrad3d/${MESO_FILE}")
+          fi
+          python scripts/konrad3d_to_json.py "${ARGS[@]}"
+
+      - name: Upload JSON zu R2
+        run: |
+          aws s3 cp \
+            output/konrad3d.json \
+            "s3://${{ secrets.R2_BUCKET }}/${R2_PREFIX}/konrad3d.json" \
+            --content-type application/json \
+            --cache-control "public, max-age=60" \
+            --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
